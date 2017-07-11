@@ -1,109 +1,78 @@
-#include <iostream>
 #include <capstone/capstone.h>
+#include <cstdint>
+#include <iostream>
 
-#define DECLARE_RETURN_X(__reg__, __shift__, __mask__) \
-    return (__reg__ >> (__shift__)) & (__mask__)
+#define RCRD(__R__, __mask__, __offset__, __shift__) \
+    __types[X86_REG_ ## __R__] = {__mask__, __offset__, __shift__}
 
-#define DECLARE_CASE_RETURN(__r__, __R__, __shift__, __mask__) \
-    case X86_REG_ ## __R__ : DECLARE_RETURN_X(__r__, __shift__, __mask__);
+#define RCRD_ALL(__R8__, __R16__, __R32__, __R64__, __OFFR__) \
+    RCRD(__R8__,  0xff, OFF_ ## __OFFR__, 0); \
+    RCRD(__R16__, 0xffff, OFF_ ## __OFFR__, 0); \
+    RCRD(__R32__, 0xffffffff, OFF_ ## __OFFR__, 0); \
+    RCRD(__R64__, 0xffffffffffffffff, OFF_ ## __OFFR__, 0)
 
-#define DECLARE_CASE_RETURN_X(__x__, __X__) \
-    DECLARE_CASE_RETURN(__x__, R ## __X__ ## X, 0, -1UL); \
-    DECLARE_CASE_RETURN(__x__, E ## __X__ ## X, 0, (1UL << 32) - 1); \
-    DECLARE_CASE_RETURN(__x__, __X__ ## X, 0, (1UL << 16) - 1); \
-    DECLARE_CASE_RETURN(__x__, __X__ ## H, 8, (1UL << 8) - 1); \
-    DECLARE_CASE_RETURN(__x__, __X__ ## L, 0, (1UL << 8) - 1)
+#define RCRD_ALL_X(__RL__, __OFFR__) \
+    RCRD(__RL__ ## H, 0xff, OFF_ ## __OFFR__, 8); \
+    RCRD_ALL(__RL__ ## L, __RL__ ## X, E ## __RL__ ## X, R ## __RL__ ## X, __OFFR__)
 
-#define DECLARE_CASE_RETURN_R(__x__, __N__) \
-    DECLARE_CASE_RETURN(__x__, __N__, 0, -1UL); \
-    DECLARE_CASE_RETURN(__x__, __N__ ## D, 0, (1UL << 32) - 1); \
-    DECLARE_CASE_RETURN(__x__, __N__ ## W, 0, (1UL << 16) - 1); \
-    DECLARE_CASE_RETURN(__x__, __N__ ## B, 0, (1UL << 8) - 1);
+#define RCRD_ALL_R(__RL__, __OFFR__) \
+    RCRD_ALL(__RL__ ## B, __RL__ ## W, __RL__ ## D, __RL__ , __OFFR__)
 
-#define DECLARE_CASE_RETURN_IP(__x__, __X__) \
-    DECLARE_CASE_RETURN(__x__, R ## __X__, 0, -1UL); \
-    DECLARE_CASE_RETURN(__x__, E ## __X__, 0, (1UL << 32) - 1); \
-    DECLARE_CASE_RETURN(__x__, __X__, 0, (1UL << 16) - 1);
-
-#define DECLARE_ASSIGN_X(__reg__, __shift__, __mask__, v) \
-    /*                 clean space of __reg__          /      emplace register         */ \
-    __reg__ = (__reg__ & (~((__mask__) << __shift__))) | (((v) & (__mask__)) << (__shift__))
-
-#define DECLARE_CASE_ASSIGN(__r__, __R__, __shift__, __mask__, v) \
-    case X86_REG_ ## __R__ : DECLARE_ASSIGN_X(__r__, __shift__, __mask__, v); break
-
-#define DECLARE_CASE_ASSIGN_X(__x__, __X__, v) \
-    DECLARE_CASE_ASSIGN(__x__, R ## __X__ ## X, 0, -1UL, v); \
-    DECLARE_CASE_ASSIGN(__x__, E ## __X__ ## X, 0, (1UL << 32) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __X__ ## X, 0, (1UL << 16) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __X__ ## H, 8, (1UL << 8) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __X__ ## L, 0, (1UL << 8) - 1, v)
-
-#define DECLARE_CASE_ASSIGN_R(__x__, __N__, v) \
-    DECLARE_CASE_ASSIGN(__x__, __N__, 0, -1UL, v); \
-    DECLARE_CASE_ASSIGN(__x__, __N__ ## D, 0, (1UL << 32) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __N__ ## W, 0, (1UL << 16) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __N__ ## B, 0, (1UL << 8) - 1, v);
-
-#define DECLARE_CASE_ASSIGN_IP(__x__, __X__, v) \
-    DECLARE_CASE_ASSIGN(__x__, R ## __X__, 0, -1UL, v); \
-    DECLARE_CASE_ASSIGN(__x__, E ## __X__, 0, (1UL << 32) - 1, v); \
-    DECLARE_CASE_ASSIGN(__x__, __X__, 0, (1UL << 16) - 1, v);
-
+#define RCRD_ALL_IP(__RL__, __OFFR__) \
+    RCRD_ALL(__RL__ ## L, __RL__, E ## __RL__ , R ## __RL__ , __OFFR__)
 
 struct pt_regs {
     uint64_t r15, r14, r13, r12, rbp, rbx;
     uint64_t r11, r10, r9, r8, rax, rcx;
     uint64_t rdx ,rsi, rdi, orig_ax;
     uint64_t rip, cs, flags, rsp, ss;
-    uint64_t get(enum x86_reg reg)
-    {
-        switch (reg) {
-            DECLARE_CASE_RETURN_X(rax, A);
-            DECLARE_CASE_RETURN_X(rbx, B);
-            DECLARE_CASE_RETURN_X(rcx, C);
-            DECLARE_CASE_RETURN_X(rdx, D);
-            DECLARE_CASE_RETURN_R(r8, R8);
-            DECLARE_CASE_RETURN_R(r9, R9);
-            DECLARE_CASE_RETURN_R(r10, R10);
-            DECLARE_CASE_RETURN_R(r11, R11);
-            DECLARE_CASE_RETURN_R(r12, R12);
-            DECLARE_CASE_RETURN_R(r13, R13);
-            DECLARE_CASE_RETURN_R(r14, R14);
-            DECLARE_CASE_RETURN_R(r15, R15);
-            DECLARE_CASE_RETURN_IP(rbp, BP);
-            DECLARE_CASE_RETURN_IP(rsp, SP);
-            DECLARE_CASE_RETURN_IP(rdi, DI);
-            DECLARE_CASE_RETURN_IP(rsi, SI);
-            default: return 0;
-        }
-    }
-    void set(enum x86_reg reg, uint64_t v)
-    {
-        switch (reg) {
-            DECLARE_CASE_ASSIGN_X(rax, A, v);
-            DECLARE_CASE_ASSIGN_X(rbx, B, v);
-            DECLARE_CASE_ASSIGN_X(rcx, C, v);
-            DECLARE_CASE_ASSIGN_X(rdx, D, v);
-            DECLARE_CASE_ASSIGN_R(r8, R8, v);
-            DECLARE_CASE_ASSIGN_R(r9, R9, v);
-            DECLARE_CASE_ASSIGN_R(r10, R10, v);
-            DECLARE_CASE_ASSIGN_R(r11, R11, v);
-            DECLARE_CASE_ASSIGN_R(r12, R12, v);
-            DECLARE_CASE_ASSIGN_R(r13, R13, v);
-            DECLARE_CASE_ASSIGN_R(r14, R14, v);
-            DECLARE_CASE_ASSIGN_R(r15, R15, v);
-            DECLARE_CASE_ASSIGN_IP(rbp, BP, v);
-            DECLARE_CASE_ASSIGN_IP(rsp, SP, v);
-            DECLARE_CASE_ASSIGN_IP(rdi, DI, v);
-            DECLARE_CASE_ASSIGN_IP(rsi, SI, v);
-            default: break;
-        }
-    }
-
 };
 
-void display_pt_regs(const struct pt_regs& r)
+class registers {
+        enum register_offset {
+            OFF_R15 = 0, OFF_R14, OFF_R13, OFF_R12, OFF_RBP, OFF_RBX, OFF_R11,
+            OFF_R10, OFF_R9, OFF_R8 , OFF_RAX, OFF_RCX, OFF_RDX, OFF_RSI,
+            OFF_RDI, OFF_ORIG_AX, OFF_RIP, OFF_CS, OFF_RFLAGS, OFF_RSP, OFF_SS
+        };
+        struct register_type {
+            uint64_t mask;
+            uint16_t offset, shift;
+        };
+
+    public:
+        registers() : __regs{} {
+            RCRD_ALL_X(A, RAX); RCRD_ALL_X(B, RBX); RCRD_ALL_X(C, RCX);
+            RCRD_ALL_X(D, RDX); RCRD_ALL_R(R8, R8); RCRD_ALL_R(R9, R9);
+            RCRD_ALL_R(R10, R10); RCRD_ALL_R(R11, R11); RCRD_ALL_R(R12, R12);
+            RCRD_ALL_R(R13, R13); RCRD_ALL_R(R14, R14); RCRD_ALL_R(R15, R15);
+            RCRD_ALL_IP(BP, RBP); RCRD_ALL_IP(SP, RSP); RCRD_ALL_IP(DI, RDI);
+            RCRD_ALL_IP(SI, RSI); RCRD(RIP, 0xffffffffffffffff, OFF_RIP, 0);
+        }
+        uint64_t get(enum x86_reg reg) const
+        {
+            const auto& type = __types[reg];
+            return (__regs[type.offset] >> type.shift) & type.mask;
+        }
+        void set(enum x86_reg reg, uint64_t v)
+        {
+            const auto& type = __types[reg];
+            auto& r = __regs[type.offset];
+            r = r & (~(type.mask << type.shift)); // clean space
+            r |= ((v & type.mask) << type.shift); // emplace value
+        }
+        const struct pt_regs* pt_regs(void) const
+        { return &__pt_regs; }
+        
+    private:
+        struct register_type __types[X86_REG_ENDING];
+        union {
+            uint64_t __regs[21];
+            struct pt_regs __pt_regs;
+        };
+};
+
+
+void display_pt_regs(const struct pt_regs* r)
 {
     std::printf("         RIP: %016lx       RFLAGS: %08lx\n"
             "          CS: %04lx    SS: %04lx\n"
@@ -115,45 +84,44 @@ void display_pt_regs(const struct pt_regs& r)
             "         R10: %016lx       R11: %016lx\n"
             "         R12: %016lx       R13: %016lx\n"
             "         R14: %016lx       R15: %016lx\n",
-            r.rip, r.flags,
-            r.cs, r.ss,
-            r.rsp, r.rbp, r.rsi, r.rdi,
-            r.rax, r.rbx, r.rcx, r.rdx,
-            r.r8, r.r9, r.r10, r.r11,
-            r.r12, r.r13, r.r14, r.r15);
+            r->rip, r->flags,
+            r->cs, r->ss,
+            r->rsp, r->rbp, r->rsi, r->rdi,
+            r->rax, r->rbx, r->rcx, r->rdx,
+            r->r8, r->r9, r->r10, r->r11,
+            r->r12, r->r13, r->r14, r->r15);
 }
 
+
 int main(void) {
-    struct pt_regs regs{};
-    regs.rax = 0xffeeddccbbaa9988;
-    std::cout << std::hex 
-        << "rax: " << regs.rax << std::endl
-        << "eax: " << regs.get(X86_REG_EAX) << std::endl
-        << "ax: " << regs.get(X86_REG_AX)<< std::endl
-        << "ah: " << regs.get(X86_REG_AH) << std::endl
-        << "al: " << regs.get(X86_REG_AL) << std::endl;
+    registers regs;
+
+    regs.set(X86_REG_RAX, 0xffffffffffffffff);
+    regs.set(X86_REG_RIP, 0xffffffffffffffff);
+    regs.set(X86_REG_R15, 0xffffffffffffffff);
     regs.set(X86_REG_EAX, 0xdeadbeef);
     std::cout << std::hex 
-        << "rax: " << regs.rax << std::endl
+        << "rax: " << regs.get(X86_REG_RAX) << std::endl
         << "eax: " << regs.get(X86_REG_EAX) << std::endl
         << "ax: " << regs.get(X86_REG_AX)<< std::endl
         << "ah: " << regs.get(X86_REG_AH) << std::endl
         << "al: " << regs.get(X86_REG_AL) << std::endl;
     regs.set(X86_REG_AH, 0xde);
     std::cout << std::hex 
-        << "rax: " << regs.rax << std::endl
+        << "rax: " << regs.get(X86_REG_RAX) << std::endl
         << "eax: " << regs.get(X86_REG_EAX) << std::endl
         << "ax: " << regs.get(X86_REG_AX)<< std::endl
         << "ah: " << regs.get(X86_REG_AH) << std::endl
         << "al: " << regs.get(X86_REG_AL) << std::endl;
     regs.set(X86_REG_AL, 0xaf);
     std::cout << std::hex 
-        << "rax: " << regs.rax << std::endl
+        << "rax: " << regs.get(X86_REG_RAX) << std::endl
         << "eax: " << regs.get(X86_REG_EAX) << std::endl
         << "ax: " << regs.get(X86_REG_AX)<< std::endl
         << "ah: " << regs.get(X86_REG_AH) << std::endl
         << "al: " << regs.get(X86_REG_AL) << std::endl;
 
-    display_pt_regs(regs);
-
+    display_pt_regs(regs.pt_regs());
+    return 0;
 }
+
